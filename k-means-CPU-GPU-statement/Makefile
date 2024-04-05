@@ -9,6 +9,7 @@ GPUCC = /usr/local/cuda/bin/nvcc
 CXXFLAGS = -O3  #-DDP
 CXXFLAGS += -I/usr/local/cuda/include/
 CC_CXXFLAGS = -fopenmp -funroll-loops
+# When atomic add at block scale ... might need to change the following line
 CUDA_TARGET_FLAGS =
 #CUDA_TARGET_FLAGS = --gpu-architecture=sm_60 #RTX 1080
 #CUDA_TARGET_FLAGS = --gpu-architecture=sm_75 #RTX 2080

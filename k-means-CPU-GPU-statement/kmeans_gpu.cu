@@ -20,12 +20,14 @@
 /* Define pointers on GPU variables, and GPU symbols                          */
 /*----------------------------------------------------------------------------*/
 // Choose the ONE you need (big array)
-//T_real *GPU_instance;      //[NB_INSTANCES][NB_DIMS] --> [NB_INSTANCES * NB_DIMS]
-//T_real *GPU_instance_T;    //[NB_DIMS][NB_INSTANCES] --> [NB_DIMS * NB_INSTANCES]
+T_real *GPU_instance;      //[NB_INSTANCES][NB_DIMS] --> [NB_INSTANCES * NB_DIMS]
+T_real *GPU_instance_T;    //[NB_DIMS][NB_INSTANCES] --> [NB_DIMS * NB_INSTANCES]
+
+T_real *GPU_temp_T;          // Temp var for step 1
 
 // Choose the one you need or both (small arrays)
-//T_real *GPU_centroid;      //[NB_CLUSTERS][NB_DIMS] --> [NB_CLUSTERS * NB_DIMS]
-//T_real *GPU_centroid_T;    //[NB_DIMS][NB_CLUSTERS] --> [NB_DIMS * NB_CLUSTERS]
+T_real *GPU_centroid;      //[NB_CLUSTERS][NB_DIMS] --> [NB_CLUSTERS * NB_DIMS]
+T_real *GPU_centroid_T;    //[NB_DIMS][NB_CLUSTERS] --> [NB_DIMS * NB_CLUSTERS]
 
 int *GPU_label;             //[NB_INSTANCES] Label of each point
 int *GPU_change;            //[NB_INSTANCES] Flag recording the change of label
@@ -48,12 +50,16 @@ void gpu_Init()
   // Allocate memory space for GPU arrays
   
   // Choose ONE (Big array)
-  //CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_instance, sizeof(T_real)*NB_INSTANCES*NB_DIMS), "Dynamic allocation for GPU_instance");
-  //CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_instance_T, sizeof(T_real)*NB_DIMS*NB_INSTANCES), "Dynamic allocation for GPU_instance_T");
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_instance, sizeof(T_real)*NB_INSTANCES*NB_DIMS), "Dynamic allocation for GPU_instance");
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_instance_T, sizeof(T_real)*NB_DIMS*NB_INSTANCES), "Dynamic allocation for GPU_instance_T");
   
+  // Temp var for step 1
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_temp_T, sizeof(T_real)*NB_DIMS*NB_INSTANCES/2), "Dynamic allocation for GPU_temp");
+  
+
   // Choose one or both (small array)
-  //CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_centroid, sizeof(T_real)*NB_CLUSTERS*NB_DIMS), "Dynamic allocation for GPU_centroid");
-  //CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_centroid_T, sizeof(T_real)*NB_DIMS*NB_CLUSTERS), "Dynamic allocation for GPU_centroid_T");
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_centroid, sizeof(T_real)*NB_CLUSTERS*NB_DIMS), "Dynamic allocation for GPU_centroid");
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_centroid_T, sizeof(T_real)*NB_DIMS*NB_CLUSTERS), "Dynamic allocation for GPU_centroid_T");
   
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_label, sizeof(int)*NB_INSTANCES), "Dynamic allocation for GPU_label");
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_change, sizeof(int)*NB_INSTANCES), "Dynamic allocation for GPU_change");
@@ -73,10 +79,13 @@ void gpu_Init()
 void gpu_Finalize()
 {
   // Free dynamic allocations (function of the arrays you used)
-  //CHECK_CUDA_SUCCESS(cudaFree(GPU_instance), "Free the dynamic allocation for GPU_instance");
-  //CHECK_CUDA_SUCCESS(cudaFree(GPU_instance_T), "Free the dynamic allocation for GPU_instance_T");
-  //CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid), "Free the dynamic allocation for GPU_centroid");
-  //CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid_T), "Free the dynamic allocation for GPU_centroid_T");
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_instance), "Free the dynamic allocation for GPU_instance");
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_instance_T), "Free the dynamic allocation for GPU_instance_T");
+  
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_instance_T), "Free the dynamic allocation for GPU_temp_T");
+
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid), "Free the dynamic allocation for GPU_centroid");
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid_T), "Free the dynamic allocation for GPU_centroid_T");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_label), "Free the dynamic allocation for GPU_label");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_change), "Free the dynamic allocation for GPU_change");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_count), "Free the dynamic allocation for GPU_count");
@@ -95,10 +104,22 @@ void gpu_Finalize()
 void gpu_SetDataOnGPU()
 {
   // Transfer instance[] or instance_T[] .... as you want                  // TO DO
-  //CHECK_CUDA_SUCCESS(cudaMemcpy(..., ..., 
-  //                              sizeof(T_real)*NB_DIMS*NB_INSTANCES, 
-  //                              cudaMemcpyHostToDevice),
-  //                   "Transfer instance...");
+  CHECK_CUDA_SUCCESS(cudaMemcpy(GPU_instance, instance,
+                                sizeof(T_real)*NB_DIMS*NB_INSTANCES, 
+                                cudaMemcpyHostToDevice),
+                      "Transfer instance...");
+
+
+  
+  T_real alpha = 1.0f;
+  T_real beta = 0.0f;
+  CHECK_CUBLAS_SUCCESS(CUBLAS_GEAM(cublasHandle,
+                                  CUBLAS_OP_T, CUBLAS_OP_N,
+                                  NB_INSTANCES, NB_DIMS,
+                                  &alpha, GPU_instance, NB_DIMS,
+                                  &beta, NULL, NB_INSTANCES,
+                                  GPU_instance_T, NB_INSTANCES), 
+                      "Use CUBLAS_GEAM to transpose GPU_instance");
 }
 
 
@@ -108,16 +129,28 @@ void gpu_SetDataOnGPU()
 void gpu_GetResultOnCPU()
 {
   // Transfer labels computed on GPU, to the CPU                           // TO DO
-  //CHECK_CUDA_SUCCESS(cudaMemcpy(label, ..., 
-  //                              sizeof(int)*NB_INSTANCES, 
-  //                              cudaMemcpyDeviceToHost),
-  //                   "Transfer labels...");
+  CHECK_CUDA_SUCCESS(cudaMemcpy(label, GPU_label, 
+                               sizeof(int)*NB_INSTANCES, 
+                               cudaMemcpyDeviceToHost),
+                    "Transfer labels...");
 
   // Transfer final centroids computed on GPU, to the CPU                  // TO DO
-  //CHECK_CUDA_SUCCESS(cudaMemcpy(centroid, ..., 
-  //                              sizeof(T_real)*NB_CLUSTERS*NB_DIMS,
-  //                              cudaMemcpyDeviceToHost),
-  //                   "Transfer centroids...");
+  // MIGHT NEED TO TRANSPOSE !
+
+  T_real alpha = 1.0f;
+  T_real beta = 0.0f;
+  CHECK_CUBLAS_SUCCESS(CUBLAS_GEAM(cublasHandle,
+                                  CUBLAS_OP_T, CUBLAS_OP_N,
+                                  NB_DIMS, NB_CLUSTERS,
+                                  &alpha, GPU_centroid_T, NB_CLUSTERS,
+                                  &beta, NULL, NB_DIMS,
+                                  GPU_centroid, NB_DIMS), 
+                      "Use CUBLAS_GEAM to transpose GPU_centroid_T");
+
+  CHECK_CUDA_SUCCESS(cudaMemcpy(centroid, GPU_centroid,
+                               sizeof(T_real)*NB_CLUSTERS*NB_DIMS,
+                               cudaMemcpyDeviceToHost),
+                    "Transfer centroids...");
 }
 
 
@@ -129,7 +162,7 @@ __global__ void kernel_SetupcuRand(curandState *state)
   int centroidIdx = threadIdx.x + blockIdx.x * blockDim.x;
 
   if (centroidIdx < NB_CLUSTERS) {
-    curand_init(1234, centroidIdx, 0, &state[centroidIdx]);
+    curand_init(4321, centroidIdx, 0, &state[centroidIdx]);
   }
 }
 
@@ -137,7 +170,7 @@ __global__ void kernel_SetupcuRand(curandState *state)
 /*-------------------------------------------------------------------------------*/
 /* Select the initial centroids (uniformly at random) from the input data        */
 /*-------------------------------------------------------------------------------*/
-__global__ void kernel_InitializeCentroids(curandState *state /*add parameters*/)
+__global__ void kernel_InitializeCentroids(curandState *state, T_real *GPU_centroid_T, T_real *GPU_instance_T)
                                            /*T_real *GPU_centroid OR *GPU_centroid_T*/ 
                                            /*T_real *GPU_instance OR *GPU_instance_T*/
 {
@@ -154,11 +187,17 @@ __global__ void kernel_InitializeCentroids(curandState *state /*add parameters*/
     int idx = floor(NB_INSTANCES * CURAND_UNIFORM(&localState));
     
     // Set the centroid coordinates with the selected input data coordinates 
-    //for (int j = 0; j < NB_DIMS; j++)                                   // TO DO
+    for (int j = 0; j < NB_DIMS; j++)                                   // TO DO
     //  GPU_centroid[...] = GPU_instance[...]
     //  or GPU_centroid_T[...] = GPU_instance_T[...]
     //  or GPU_centroid[...] = GPU_instance_T[...]
     //  or GPU_centroid_T[...] = GPU_instance[...]
+
+      // SHARED MEMORY TO IMPROVE? (should use Tranpose matrix of GPU_intance instead)
+      // GPU_centroid_T[j][centroidIdx] = GPU_instance[idx][j];
+      // GPU_centroid_T[j * NB_CLUSTERS + centroidIdx] = GPU_instance[idx * NB_DIMS + j];
+      GPU_centroid_T[j * NB_CLUSTERS + centroidIdx] = GPU_instance_T[j * NB_INSTANCES + idx];
+
   }
 }
 
@@ -166,14 +205,37 @@ __global__ void kernel_InitializeCentroids(curandState *state /*add parameters*/
 /*-------------------------------------------------------------------------------*/
 /* Compute distances and Assign each point to its nearest centorid               */
 /*-------------------------------------------------------------------------------*/
-__global__ void kernel_ComputeAssign(/*add parameters*/)
+__global__ void kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, unsigned long long *AdrGPU_change_total)
 {
- // TO DO
+  // TO DO
+
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+  int closest_centroid_idx = 0;
+  T_real min_dist = REAL_MAX;
+  for(int i = 0; i < NB_CLUSTERS; ++i)
+  {
+    float distance = 0.0;
+    for(int j = 0; j < NB_DIMS; ++j)
+    {
+      float temp = (GPU_instance_T[j * NB_INSTANCES + idx] - GPU_centroid_T[j * NB_CLUSTERS + i]);
+      distance += temp*temp;
+    }
+    if(distance < min_dist)
+    {
+      min_dist = distance;
+      closest_centroid_idx = i;
+    }
+  }
+  if(GPU_label[idx] != closest_centroid_idx)
+  {
+    atomicAdd(AdrGPU_change_total, 1);
+    GPU_label[idx] = closest_centroid_idx;
+  }
  
- // Note:
- //   The "atomic add" on global GPU var could be useful:
- //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
- //   Warning: time consumming function
+  // Note:
+  //   The "atomic add" on global GPU var could be useful:
+  //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
+  //   Warning: time consumming function
 }
 
 
@@ -182,12 +244,110 @@ __global__ void kernel_ComputeAssign(/*add parameters*/)
 /*-------------------------------------------------------------------------------*/
 __global__ void kernel_UpdateCentroid_Step1(/*add parameters*/)
 {
- // TO DO
- 
- // Note:
- //   The "atomic add" on global GPU var could be useful:
- //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
- //   Warning: time consumming function
+  // TO DO
+
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+  // if(idx < NB_INSTANCES)
+  // {
+  //   int cluster_idx = GPU_label[idx];
+  //   atomicAdd(&GPU_count[cluster_idx], 1);
+  //   for(int j = 0; j < NB_DIMS; ++j)
+  //   {
+  //     atomicAdd(&GPU_centroid_T[j * NB_CLUSTERS + cluster_idx], GPU_instance_T[j * NB_INSTANCES + idx]);
+  //   }
+  // }
+
+  // for(int i = 0; i < NB_CLUSTERS; ++i){
+  //   __shared__ int count[BLOCK_SIZE_X_N];
+  //   __shared__ T_real sum[BLOCK_SIZE_X_N][NB_DIMS];
+  //   count[threadIdx.x] = 0;
+  //   for(int j = 0; j < NB_DIMS; ++j)
+  //   {
+  //     sum[threadIdx.x][j] = 0.0;
+  //   }
+  //   __syncthreads();
+  //   for(int j = 0; j < NB_INSTANCES; j += blockDim.x)
+  //   {
+  //     if(j + threadIdx.x < NB_INSTANCES)
+  //     {
+  //       if(GPU_label[j + threadIdx.x] == i)
+  //       {
+  //         atomicAdd(&count[threadIdx.x], 1);
+  //         for(int k = 0; k < NB_DIMS; ++k)
+  //         {
+  //           atomicAdd(&sum[threadIdx.x][k], GPU_instance_T[k * NB_INSTANCES + j + threadIdx.x]);
+  //         }
+  //       }
+  //     }
+  //   }
+  //   __syncthreads();
+  //   if(threadIdx.x == 0)
+  //   {
+  //     for(int j = 0; j < blockDim.x; ++j)
+  //     {
+  //       atomicAdd(&GPU_count[i], count[j]);
+  //       for(int k = 0; k < NB_DIMS; ++k)
+  //       {
+  //         atomicAdd(&GPU_centroid_T[k * NB_CLUSTERS + i], sum[j][k]);
+  //       }
+  //     }
+  //   }
+  //   __syncthreads();
+  // }
+
+  int offset = 0;
+  
+  for(int clusterIdx = 0; i < NB_CLUSTERS; ++i){
+    
+    for(int dim = 0; j < NB_DIMS; ++j)
+    {
+      offset = 
+      // loop of the reduction
+    
+      // CHECK IF IT WORKS
+      for (int offset = NB_INSTANCES / 2; offset > 0; offset /= 2) 
+        
+        // disable some threads
+        if(threadIdx.x < offset)
+        {
+          // idx change
+          label1 = GPU_label[idx];
+          label2 = GPU_label[idx + offset];
+
+          // shitty code
+          int bool1 = int(label1 == clusterIdx);
+          int bool2 = int(label2 == clusterIdx);
+
+          // GPU_count[clusterIdx] += bool1 + bool2;
+
+          // atomic add instead 
+
+          atomicAdd(&(GPU_count[clusterIdx]), bool1 + bool2);
+          
+          if (reduc == 0)
+          {
+            GPU_temp[j * NB_INSTANCES + idx] += bool1*GPU_instance_T[j * NB_INSTANCES + idx]; + bool2*GPU_instance_T[j * NB_INSTANCES + idx + offset];
+          }
+
+          else{
+            GPU_temp[j * NB_INSTANCES + idx] += bool1*GPU_temp[j * NB_INSTANCES + idx]; + bool2*GPU_temp[j * NB_INSTANCES + idx + offset];
+          }
+          
+          
+
+          __syncthreads();
+        }
+      }
+
+    }
+
+
+  }
+
+  // Note:
+  //   The "atomic add" on global GPU var could be useful:
+  //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
+  //   Warning: time consumming function
 }
 
 
@@ -230,8 +390,8 @@ void gpu_Kmeans()
   kernel_SetupcuRand<<<Dg,Db>>>(devStates);
   
   // Select initial centroids at random                              // TO DO
-  //CudaCheckError();
-  kernel_InitializeCentroids<<<Dg,Db>>>(devStates /*add parameters*/);
+  // CudaCheckError();
+  kernel_InitializeCentroids<<<Dg,Db>>>(devStates, GPU_centroid_T, GPU_instance_T);
 
   //CudaCheckError();
 
@@ -262,7 +422,7 @@ void gpu_Kmeans()
     Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
     Dg.y = 1;
     Dg.z = 1;
-    kernel_ComputeAssign<<<Dg,Db>>>(/*add parameters*/);
+    kernel_ComputeAssign<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, AdrGPU_change_total);
     CudaCheckError();
 
     CHECK_CUDA_SUCCESS(cudaMemcpy(&nb_changes, AdrGPU_change_total, 
@@ -285,6 +445,9 @@ void gpu_Kmeans()
     Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
     Dg.y = 1;
     Dg.z = 1;
+
+    T_real *GPU_temp;
+
     kernel_UpdateCentroid_Step1<<<Dg,Db>>>(/*add parameters*/);
 
     // - Update Centroids - step 2

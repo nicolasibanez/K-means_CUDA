@@ -18,7 +18,8 @@
 #define OUTPUT_CENTROIDS_FINAL "FinalCentroids_"
 
 #define TOL_KMEANS      0.0f         // End criteria
-#define MAX_ITER_KMEANS 200
+// #define MAX_ITER_KMEANS 200
+#define MAX_ITER_KMEANS 1
 
 #define BLOCK_SIZE_X_N  256          // BLOCK_SIZE_X related to NB_INSTANCES
 #define BLOCK_SIZE_X_C  32           // BLOCK_SIZE_X related to NB_CLUSTERS
