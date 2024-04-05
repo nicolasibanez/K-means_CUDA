@@ -1,0 +1,3 @@
+DATA_S1_1E4.txt
+10000 input data
+4 clusters

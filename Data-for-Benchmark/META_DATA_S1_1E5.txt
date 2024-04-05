@@ -1,0 +1,3 @@
+DATA_S1_1E5.txt
+100000 input data
+4 clusters
