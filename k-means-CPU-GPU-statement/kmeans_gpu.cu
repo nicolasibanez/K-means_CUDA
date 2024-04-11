@@ -54,7 +54,7 @@ void gpu_Init()
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_instance_T, sizeof(T_real)*NB_DIMS*NB_INSTANCES), "Dynamic allocation for GPU_instance_T");
   
   // Temp var for step 1
-  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_temp_T, sizeof(T_real)*NB_DIMS*NB_INSTANCES/2), "Dynamic allocation for GPU_temp");
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_temp_T, sizeof(T_real)*NB_INSTANCES/2), "Dynamic allocation for GPU_temp");
   
 
   // Choose one or both (small array)
@@ -82,7 +82,7 @@ void gpu_Finalize()
   CHECK_CUDA_SUCCESS(cudaFree(GPU_instance), "Free the dynamic allocation for GPU_instance");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_instance_T), "Free the dynamic allocation for GPU_instance_T");
   
-  CHECK_CUDA_SUCCESS(cudaFree(GPU_instance_T), "Free the dynamic allocation for GPU_temp_T");
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_temp_T), "Free the dynamic allocation for GPU_temp_T");
 
   CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid), "Free the dynamic allocation for GPU_centroid");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_centroid_T), "Free the dynamic allocation for GPU_centroid_T");
@@ -242,7 +242,7 @@ __global__ void kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroi
 /*-------------------------------------------------------------------------------*/
 /* Update centroids - step 1                                                     */
 /*-------------------------------------------------------------------------------*/
-__global__ void kernel_UpdateCentroid_Step1(/*add parameters*/)
+__global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count, T_real *GPU_temp_T)
 {
   // TO DO
 
@@ -295,24 +295,26 @@ __global__ void kernel_UpdateCentroid_Step1(/*add parameters*/)
   //   __syncthreads();
   // }
 
-  int offset = 0;
+  // int offset = 0;
   
-  for(int clusterIdx = 0; i < NB_CLUSTERS; ++i){
+  for(int clusterIdx = 0; clusterIdx < NB_CLUSTERS; ++clusterIdx){
     
-    for(int dim = 0; j < NB_DIMS; ++j)
-    {
-      offset = 
-      // loop of the reduction
-    
+    for(int dim = 0; dim < NB_DIMS; ++dim) {
+      
+      //need to do something to set GPU_temp to 0 -> DONE BELOW
+
       // CHECK IF IT WORKS
-      for (int offset = NB_INSTANCES / 2; offset > 0; offset /= 2) 
+      int offset = NB_INSTANCES;
+      for (int k = 0; offset>0; ++k) {
+
+        offset /= 2;
+      // for (int offset = NB_INSTANCES / 2; offset > 1; offset /= 2)  {
         
         // disable some threads
-        if(threadIdx.x < offset)
-        {
+        if(threadIdx.x < offset) {
           // idx change
-          label1 = GPU_label[idx];
-          label2 = GPU_label[idx + offset];
+          int label1 = GPU_label[idx];
+          int label2 = GPU_label[idx + offset];
 
           // shitty code
           int bool1 = int(label1 == clusterIdx);
@@ -322,22 +324,27 @@ __global__ void kernel_UpdateCentroid_Step1(/*add parameters*/)
 
           // atomic add instead 
 
-          atomicAdd(&(GPU_count[clusterIdx]), bool1 + bool2);
+          GPU_count[clusterIdx] = 250;
+          // atomicAdd(&(GPU_count[clusterIdx]), bool1 + bool2);
           
-          if (reduc == 0)
-          {
-            GPU_temp[j * NB_INSTANCES + idx] += bool1*GPU_instance_T[j * NB_INSTANCES + idx]; + bool2*GPU_instance_T[j * NB_INSTANCES + idx + offset];
+          if (offset == NB_INSTANCES / 2) {
+            GPU_temp_T[NB_INSTANCES + idx] = bool1*GPU_instance_T[dim * NB_INSTANCES + idx]; + bool2*GPU_instance_T[dim * NB_INSTANCES + idx + offset];
+          } 
+          else {
+            GPU_temp_T[NB_INSTANCES + idx] += bool1*GPU_temp_T[dim * NB_INSTANCES + idx]; + bool2*GPU_temp_T[dim * NB_INSTANCES + idx + offset];
           }
-
-          else{
-            GPU_temp[j * NB_INSTANCES + idx] += bool1*GPU_temp[j * NB_INSTANCES + idx]; + bool2*GPU_temp[j * NB_INSTANCES + idx + offset];
-          }
-          
           
 
           __syncthreads();
         }
+
+        if (threadIdx.x==0) {
+          // GPU_temp[]
+          GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx] = GPU_temp_T[0]; // ok since GPU_temp_T is of size NB_instances / 2
+        }
+        
       }
+
 
     }
 
@@ -354,8 +361,16 @@ __global__ void kernel_UpdateCentroid_Step1(/*add parameters*/)
 /*-------------------------------------------------------------------------------*/
 /* Update centroids - step 2                                                     */
 /*-------------------------------------------------------------------------------*/
-__global__ void kernel_UpdateCentroid_Step2(/*add parameters*/)
+__global__ void kernel_UpdateCentroid_Step2(T_real *GPU_centroid_T, int *GPU_count)
 {
+
+  int clusterIdx = threadIdx.x + blockIdx.x * blockDim.x;
+
+  if (clusterIdx < NB_CLUSTERS) {   
+    for (int dim = 0; dim < NB_DIMS; ++dim) {
+      GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx] /= GPU_count[clusterIdx];   
+    }
+  }
  // TO DO
 
  // Note:
@@ -446,9 +461,8 @@ void gpu_Kmeans()
     Dg.y = 1;
     Dg.z = 1;
 
-    T_real *GPU_temp;
 
-    kernel_UpdateCentroid_Step1<<<Dg,Db>>>(/*add parameters*/);
+    kernel_UpdateCentroid_Step1<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, GPU_count, GPU_temp_T);
 
     // - Update Centroids - step 2
     // -- compute the barycenter of each cluster (centroid coordinate)
@@ -458,7 +472,7 @@ void gpu_Kmeans()
     Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
     Dg.y = 1;
     Dg.z = 1;
-    kernel_UpdateCentroid_Step2<<<Dg,Db>>>(/*add parameters*/);
+    kernel_UpdateCentroid_Step2<<<Dg,Db>>>(GPU_centroid_T, GPU_count);
     CudaCheckError();
 
     // - End criteria computation
