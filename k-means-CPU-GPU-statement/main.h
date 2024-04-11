@@ -3,23 +3,38 @@
 // S. Vialle March 2022 (with the help of G. He)
 ////////////////////////////////////////////////////////////////////////////////
 
-#define DATA_FILE_NAME  "DATA_S1.txt"
-#define NB_INSTANCES    1000
+// #define DATA_FILE_NAME  "DATA_S1.txt"
+// #define NB_INSTANCES    1000
+// #define NB_DIMS         2
+// #define NB_CLUSTERS     4
+
+// #define DATA_FILE_NAME  "DATA_S2.txt"
+// #define NB_INSTANCES    5000
+// #define NB_DIMS         2
+// #define NB_CLUSTERS     15
+
+// #define DATA_FILE_NAME  "DATA_S1_1E4.txt"
+// #define NB_INSTANCES    10000
+// #define NB_DIMS         2
+// #define NB_CLUSTERS     4
+
+#define DATA_FILE_NAME  "DATA_S1_1E5.txt"
+#define NB_INSTANCES    100000
 #define NB_DIMS         2
 #define NB_CLUSTERS     4
 
-//#define DATA_FILE_NAME  "DATA_S2.txt"
-//#define NB_INSTANCES    5000
-//#define NB_DIMS         2
-//#define NB_CLUSTERS     15
+// #define DATA_FILE_NAME  "DATA_S1_1E6.txt"
+// #define NB_INSTANCES    1000000
+// #define NB_DIMS         2
+// #define NB_CLUSTERS     4
 
 
 #define OUTPUT_LABELS          "Labels_"
 #define OUTPUT_CENTROIDS_FINAL "FinalCentroids_"
 
 #define TOL_KMEANS      0.0f         // End criteria
-// #define MAX_ITER_KMEANS 200
-#define MAX_ITER_KMEANS 1
+#define MAX_ITER_KMEANS 200
+// #define MAX_ITER_KMEANS 1
 
 #define BLOCK_SIZE_X_N  256          // BLOCK_SIZE_X related to NB_INSTANCES
 #define BLOCK_SIZE_X_C  32           // BLOCK_SIZE_X related to NB_CLUSTERS

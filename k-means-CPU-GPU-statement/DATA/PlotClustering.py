@@ -4,7 +4,8 @@ import sys
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
-
+import pandas as pd
+import seaborn as sns
 
 #Cmd line parsing-------------------------------------------------------------
 def cmdLineParsing():
@@ -30,14 +31,21 @@ def cmdLineParsing():
 fname = cmdLineParsing()
 
 # read data instances---------------------------------------------------------
-fo = open(fname, 'r')
-lines_instances = fo.readlines()
-fo.close()
+# fo = open(fname, 'r')
+# lines_instances = fo.readlines()
+# fo.close()
+
+# pandas version (tab separated values)
+data_df = pd.read_csv(fname, sep='\t', header=None)
+
+
 
 # read labels-----------------------------------------------------------------
-fo = open("Labels_"+fname, 'r')
-lines_labels = fo.readlines()
-fo.close()
+# fo = open("Labels_"+fname, 'r')
+# lines_labels = fo.readlines()
+# fo.close()
+
+label_df = pd.read_csv("Labels_"+fname, sep='\t', header=None)
 
 # initialize three arrays dedicated to store the coordinates and the cluster label of each data instance
 x = []
@@ -45,14 +53,19 @@ y = []
 label = []
 
 # scan the rows stored in lines, and split the values into three arrays (x, y, label)
-for line in lines_instances:
-    p = line.split()
-    x.append(float(p[0]))
-    y.append(float(p[1]))
+# for line in lines_instances:
+#     p = line.split()
+#     x.append(float(p[0]))
+#     y.append(float(p[1]))
 
-for line in lines_labels:
-    p = line.split()
-    label.append(int(p[0]))
+# for line in lines_labels:
+#     p = line.split()
+#     label.append(int(p[0]))
+
+
+x = data_df[0].values
+y = data_df[1].values
+label = label_df[0].values
 
 
 # plot the points in different colors and markers according to their labels
@@ -65,8 +78,14 @@ markers = ["s", "v", "o", "^", "<", ">", "p", "P", "*", "X",
            "X", "*", "P", "p", ">", "o", "s", "v", "^", "<",
            "_", "3", "|", "x", "+", "4", "D", "2",  "d", "1"]
 
-for i in range(len(label)):
-    plt.scatter(x[i], y[i], c = colors[label[i]], marker = markers[label[i]], s = 10)
+print("Plotting ...")
+# for i in range(len(label)):
+#     plt.scatter(x[i], y[i], c = colors[label[i]], marker = markers[label[i]], s = 10)
+
+# hue :
+sns.scatterplot(x=x, y=y, hue=label, palette="deep")
+# no legend
+# plt.legend([],[], frameon=False)
 
 #plt.show()
 plt.savefig('Clustering_' + fname+ '.png', dpi = 400)
