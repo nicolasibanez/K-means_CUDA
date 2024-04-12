@@ -30,6 +30,7 @@ T_real *GPU_centroid_T;    //[NB_DIMS][NB_CLUSTERS] --> [NB_DIMS * NB_CLUSTERS]
 int *GPU_label;             //[NB_INSTANCES] Label of each point
 int *GPU_change;            //[NB_INSTANCES] Flag recording the change of label
 int *GPU_count;             //[NB_CLUSTERS]  Count of instance points in each cluster
+int *GPU_failed;
 
 __device__ unsigned long long GPU_change_total; // nb of label changes at current iter
 unsigned long long *AdrGPU_change_total = NULL;
@@ -59,6 +60,8 @@ void gpu_Init()
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_label, sizeof(int)*NB_INSTANCES), "Dynamic allocation for GPU_label");
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_change, sizeof(int)*NB_INSTANCES), "Dynamic allocation for GPU_change");
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_count, sizeof(int)*NB_CLUSTERS), "Dynamic allocation for GPU_count");
+
+  CHECK_CUDA_SUCCESS(cudaMalloc((void**) &GPU_failed, sizeof(int)*1), "Dynamic allocation for GPU_failed");
  
   // Initialize an array of "curandState) for using curand
   CHECK_CUDA_SUCCESS(cudaMalloc((void**) &devStates, sizeof(curandState)*NB_CLUSTERS), "Dynamic allocation for devStates");
@@ -82,6 +85,8 @@ void gpu_Finalize()
   CHECK_CUDA_SUCCESS(cudaFree(GPU_label), "Free the dynamic allocation for GPU_label");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_change), "Free the dynamic allocation for GPU_change");
   CHECK_CUDA_SUCCESS(cudaFree(GPU_count), "Free the dynamic allocation for GPU_count");
+
+  CHECK_CUDA_SUCCESS(cudaFree(GPU_failed), "Free the dynamic allocation for GPU_failed");
   
   // Free array of curandStates
   CHECK_CUDA_SUCCESS(cudaFree(devStates), "Free the dynamic allocation for devStates");
@@ -323,52 +328,6 @@ __global__ void OLD2_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real 
   }
 }
 
-// Version 3 : no cluster loop
-__global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int dim = blockIdx.y;
-  int clusterIdx = blockIdx.z;
-
-  // if (threadIdx.x == 0) {
-  //   printf("idx = %d, dim = %d\n", idx, dim);
-  // }
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-
-  if (idx < NB_INSTANCES) {
-    if (GPU_label[idx] == clusterIdx) {
-      sh_count[threadIdx.x] = 1;
-      sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
-    }
-    else {
-      sh_count[threadIdx.x] = 0;
-      sh_instance[threadIdx.x] = 0;
-    }
-
-    __syncthreads();
-
-    // reduction : 
-    // 1st step : half the threads should work
-    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-      if (threadIdx.x < s) {
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-      }
-      __syncthreads();
-    }
-
-      // atomic add in GPU_centroid_T and GPU_count
-    if (threadIdx.x == 0) {
-      atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
-      if (dim == 0) {
-        atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
-      }
-    }
-  }
-}
-
 __global__ void OLD3_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
 {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -497,18 +456,74 @@ __global__ void OLD3_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real 
   }
 }
 
+// Version 3 : no cluster loop
+__global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
+{
+  int idx = threadIdx.x + blockIdx.x * blockDim.x;
+  int dim = blockIdx.y;
+  int clusterIdx = blockIdx.z;
+
+  // if (threadIdx.x == 0) {
+  //   printf("idx = %d, dim = %d\n", idx, dim);
+  // }
+
+  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
+  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
+
+  if (idx < NB_INSTANCES) {
+    if (GPU_label[idx] == clusterIdx) {
+      sh_count[threadIdx.x] = 1;
+      sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
+    }
+    else {
+      sh_count[threadIdx.x] = 0;
+      sh_instance[threadIdx.x] = 0;
+    }
+
+    __syncthreads();
+
+    // reduction : 
+    // 1st step : half the threads should work
+    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
+      if (threadIdx.x < s) {
+        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
+        sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
+      }
+      __syncthreads();
+    }
+
+      // atomic add in GPU_centroid_T and GPU_count
+    if (threadIdx.x == 0) {
+      atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
+      if (dim == 0) {
+        atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
+      }
+    }
+  }
+}
+
 /*-------------------------------------------------------------------------------*/
 /* Update centroids - step 2                                                     */
 /*-------------------------------------------------------------------------------*/
-__global__ void kernel_UpdateCentroid_Step2(T_real *GPU_centroid_T, int *GPU_count, T_real *GPU_instance_T)
+__global__ void kernel_UpdateCentroid_Step2(T_real *GPU_centroid_T, int *GPU_count, T_real *GPU_instance_T, int *GPU_failed)
 {
 
   int clusterIdx = threadIdx.x + blockIdx.x * blockDim.x;
-
+  bool failed = false;
+  
   if (clusterIdx < NB_CLUSTERS) {   
-    for (int dim = 0; dim < NB_DIMS; ++dim) {
-      if (GPU_count[clusterIdx] > 0)
-        GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx] /= GPU_count[clusterIdx];   
+    int count = GPU_count[clusterIdx];
+    if (count > 0) {
+      for (int dim = 0; dim < NB_DIMS; ++dim) { 
+        GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx] /= count;   
+      }
+    }
+    else {
+      failed = true;
+    }
+
+    if (failed){
+      atomicAdd(GPU_failed, 1);
     }
   }
  // TO DO
@@ -585,6 +600,7 @@ void gpu_Kmeans()
                                   cudaMemcpyDeviceToHost),
                        "Transfer GPU_change_total-->nb_changes");
 
+
     // - Update Centroids - step 1
     // -- reset the array of counters of points associated to each cluster
     //CHECK_CUDA_SUCCESS(cudaMemset(GPU_count, 0,...), "Reset GPU_count to zeros");
@@ -609,57 +625,78 @@ void gpu_Kmeans()
     // Dg.y = NB_DIMS; // Not in Db.y to have different shared mem for different dim
     // Dg.z = 1;
 
+    // printf("Before grille setup\n");
+
     Db.x = BLOCK_SIZE_X_N;
+    
     Db.y = 1;
     Db.z = 1;
     Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
+    // printf("Before grille setup\n");
     Dg.y = NB_DIMS; 
+    // printf("Before grille setup\n");
+    // printf("NB_CLUSTERS = %d\n", NB_CLUSTERS);
+    Dg.z = 4;
+    // printf("hardcoded\n");
     Dg.z = NB_CLUSTERS;
-
+    // printf("Before comm\n");
+    
     // printf("NB_DIMS = %d, NB_INSTANCES = %d\n", NB_DIMS, NB_INSTANCES);
     // printf("Db.x = %d, Db.y = %d, Db.z = %d\n", Db.x, Db.y, Db.z);
+
+    // printf("Dg.z");
 
     // TO verify
     // intialize GPU_centroid_T and GPU_count to 0
     CHECK_CUDA_SUCCESS(cudaMemset(GPU_centroid_T, 0, sizeof(T_real)*NB_DIMS*NB_CLUSTERS), "Reset GPU_centroid_T to zeros");
     CHECK_CUDA_SUCCESS(cudaMemset(GPU_count, 0, sizeof(int)*NB_CLUSTERS), "Reset GPU_count to zeros");
     
+    // printf("Im here2");
+
     kernel_UpdateCentroid_Step1<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, GPU_count);
 
-    bool failed = false;
-    for(int i = 0; i < NB_CLUSTERS; ++i) {
-      if (GPU_count[i] == 0) {
-        failed = true;
-        break;
-      }
-    }
-    if (failed) {
+
+
+    // Db.x = BLOCK_SIZE_X_C;
+    // Db.y = 1;
+    // Db.z = 1;
+    // Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
+    // Dg.y = 1;
+    // Dg.z = 1;
+    // kernel_UpdateCentroid_Step2<<<Dg,Db>>>(GPU_centroid_T, GPU_count, GPU_instance_T);
+
+    // Initialize the random generator used for each centroid
+    
+    
+
+    Db.x = BLOCK_SIZE_X_C;
+    Db.y = 1;
+    Db.z = 1;
+    Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
+    Dg.y = 1;
+    Dg.z = 1;
+
+    CHECK_CUDA_SUCCESS(cudaMemset(GPU_failed, 0, sizeof(int)*1), "Reset GPU_failed to zeros");
+
+    kernel_UpdateCentroid_Step2<<<Dg,Db>>>(GPU_centroid_T, GPU_count, GPU_instance_T, GPU_failed);
+    
+    int failed = 0;
+
+    CHECK_CUDA_SUCCESS(cudaMemcpy(&failed, GPU_failed, 
+      sizeof(int)*1, 
+      cudaMemcpyDeviceToHost),
+      "Transfer labels 'failed'...");
+
+    if (failed>0) {
       CHECK_CUDA_SUCCESS(cudaMemset(GPU_label, 0, sizeof(int)*NB_INSTANCES), 
                      "Reset GPU_label to zeros");
 
-      // Initialize the random generator used for each centroid
-      Db.x = BLOCK_SIZE_X_C;
-      Db.y = 1;
-      Db.z = 1;
-      Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
-      Dg.y = 1;
-      Dg.z = 1;
+
       kernel_SetupcuRand<<<Dg,Db>>>(devStates);
       
       // Select initial centroids at random                              // TO DO
       // CudaCheckError();
       kernel_InitializeCentroids<<<Dg,Db>>>(devStates, GPU_centroid_T, GPU_instance_T);
-    }
-    else {
-      // - Update Centroids - step 2
-      // -- compute the barycenter of each cluster (centroid coordinate)
-      Db.x = BLOCK_SIZE_X_C;
-      Db.y = 1;
-      Db.z = 1;
-      Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
-      Dg.y = 1;
-      Dg.z = 1;
-      kernel_UpdateCentroid_Step2<<<Dg,Db>>>(GPU_centroid_T, GPU_count, GPU_instance_T);
     }
 
     CudaCheckError();
