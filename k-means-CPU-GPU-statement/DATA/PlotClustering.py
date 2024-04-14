@@ -1,71 +1,44 @@
 import argparse
 import os
-import sys
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
+import sys
 import pandas as pd
-import seaborn as sns
+
 
 #Cmd line parsing-------------------------------------------------------------
 def cmdLineParsing():
   parser = argparse.ArgumentParser()
-  parser.add_argument("datafile", help="input data file")
+  parser.add_argument("--f", help="input data file")
   #parser.add_argument("--n", help="nb of input data", type=int)
   #parser.add_argument("--k", help="number of clusters", type=int)
+  parser.add_argument("--c", help="display centroid", action="store_true")
 
   args = parser.parse_args()
 
-  if not os.path.isfile(args.datafile):
-    sys.exit("Error: input data file '" + args.datafile + "' is unreachable!")
+  if not os.path.isfile(args.f):
+    sys.exit("Error: input data file '" + args.f + "' is unreachable!")
   #if args.n <= 0:
   #  sys.exit("Error: nb of input data must be greater than 0!")
   #if args.k <= 0:
   #  sys.exit("Error: nb of clusters must be greater than 0!")
 
-  return args.datafile  #, args.n, args.k)
+  return args.f, args.c  #, args.n, args.k)
   
 
 # Main code-------------------------------------------------------------------
 # parse the cmd line
-fname = cmdLineParsing()
+fname, c_true = cmdLineParsing()
 
 # read data instances---------------------------------------------------------
-# fo = open(fname, 'r')
-# lines_instances = fo.readlines()
-# fo.close()
-
-# pandas version (tab separated values)
-data_df = pd.read_csv(fname, sep='\t', header=None)
-
-
+df_instances = pd.read_csv(fname, header=None, names=['x', 'y'], delimiter='\t')
 
 # read labels-----------------------------------------------------------------
-# fo = open("Labels_"+fname, 'r')
-# lines_labels = fo.readlines()
-# fo.close()
+df_labels = pd.read_csv("Labels_"+fname, header=None, names=['label'])
+df = pd.concat([df_instances, df_labels], axis=1)
 
-label_df = pd.read_csv("Labels_"+fname, sep='\t', header=None)
-
-# initialize three arrays dedicated to store the coordinates and the cluster label of each data instance
-x = []
-y = []
-label = []
-
-# scan the rows stored in lines, and split the values into three arrays (x, y, label)
-# for line in lines_instances:
-#     p = line.split()
-#     x.append(float(p[0]))
-#     y.append(float(p[1]))
-
-# for line in lines_labels:
-#     p = line.split()
-#     label.append(int(p[0]))
-
-
-x = data_df[0].values
-y = data_df[1].values
-label = label_df[0].values
+df_centroids = pd.read_csv("Centroids_"+fname, header=None, names=['centroids_x', 'centroids_y'], sep='\s+')
 
 
 # plot the points in different colors and markers according to their labels
@@ -78,14 +51,14 @@ markers = ["s", "v", "o", "^", "<", ">", "p", "P", "*", "X",
            "X", "*", "P", "p", ">", "o", "s", "v", "^", "<",
            "_", "3", "|", "x", "+", "4", "D", "2",  "d", "1"]
 
-print("Plotting ...")
-# for i in range(len(label)):
-#     plt.scatter(x[i], y[i], c = colors[label[i]], marker = markers[label[i]], s = 10)
+size = 10
 
-# hue :
-sns.scatterplot(x=x, y=y, hue=label, palette="deep")
-# no legend
-# plt.legend([],[], frameon=False)
+for label, group in df.groupby('label'):
+    plt.scatter(group['x'], group['y'], c=colors[label], marker=markers[label], s=size)
 
-#plt.show()
+if c_true is True:
+  for i, row in df_centroids.iterrows():
+    plt.scatter(row['centroids_x'], row['centroids_y'], c=colors[i], marker=markers[i], s=size*10, label=str(i))
+  plt.legend()
+
 plt.savefig('Clustering_' + fname+ '.png', dpi = 400)

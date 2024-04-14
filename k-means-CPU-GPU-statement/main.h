@@ -36,7 +36,8 @@
 #define MAX_ITER_KMEANS 200
 // #define MAX_ITER_KMEANS 1
 
-#define BLOCK_SIZE_X_N  256          // BLOCK_SIZE_X related to NB_INSTANCES
+// #define BLOCK_SIZE_X_N  256          // BLOCK_SIZE_X related to NB_INSTANCES
+#define BLOCK_SIZE_X_N  128          // BLOCK_SIZE_X related to NB_INSTANCES
 #define BLOCK_SIZE_X_C  32           // BLOCK_SIZE_X related to NB_CLUSTERS
 
 #define DEFAULT_NB_THREADS  1        // Constant for OpenMP config

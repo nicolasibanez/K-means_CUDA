@@ -11,9 +11,11 @@ CXXFLAGS += -I/usr/local/cuda/include/
 CC_CXXFLAGS = -fopenmp -funroll-loops
 # When atomic add at block scale ... might need to change the following line
 CUDA_TARGET_FLAGS =
-#CUDA_TARGET_FLAGS = --gpu-architecture=sm_60 #RTX 1080
-#CUDA_TARGET_FLAGS = --gpu-architecture=sm_75 #RTX 2080
-#CUDA_TARGET_FLAGS = --gpu-architecture=sm_80 #RTX 3090
+# CUDA_TARGET_FLAGS = --gpu-architecture=sm_60 #RTX 1080
+# CUDA_TARGET_FLAGS = --gpu-architecture=sm_61 #RTX 2080
+# CUDA_TARGET_FLAGS = --gpu-architecture=sm_62 #RTX 2080
+# CUDA_TARGET_FLAGS = --gpu-architecture=sm_75 #RTX 2080
+# CUDA_TARGET_FLAGS = --gpu-architecture=sm_80 #RTX 3090
 CUDA_CXXFLAGS = $(CUDA_TARGET_FLAGS)  
 
 CC_LDFLAGS =  -fopenmp 
