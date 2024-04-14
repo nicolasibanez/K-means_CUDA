@@ -132,9 +132,7 @@ void gpu_GetResultOnCPU()
                                cudaMemcpyDeviceToHost),
                     "Transfer labels...");
 
-  // Transfer final centroids computed on GPU, to the CPU                  // TO DO
-  // MIGHT NEED TO TRANSPOSE !
-
+  // Transfer final centroids computed on GPU, to the CPU
   T_real alpha = 1.0f;
   T_real beta = 0.0f;
   CHECK_CUBLAS_SUCCESS(CUBLAS_GEAM(cublasHandle,
@@ -169,8 +167,6 @@ __global__ void kernel_SetupcuRand(curandState *state)
 /* Select the initial centroids (uniformly at random) from the input data        */
 /*-------------------------------------------------------------------------------*/
 __global__ void kernel_InitializeCentroids(curandState *state, T_real *GPU_centroid_T, T_real *GPU_instance_T)
-                                           /*T_real *GPU_centroid OR *GPU_centroid_T*/ 
-                                           /*T_real *GPU_instance OR *GPU_instance_T*/
 {
   int centroidIdx = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -185,12 +181,7 @@ __global__ void kernel_InitializeCentroids(curandState *state, T_real *GPU_centr
     int idx = floor(NB_INSTANCES * CURAND_UNIFORM(&localState));
     
     // Set the centroid coordinates with the selected input data coordinates 
-    for (int j = 0; j < NB_DIMS; j++)                                   // TO DO
-    //  GPU_centroid[...] = GPU_instance[...]
-    //  or GPU_centroid_T[...] = GPU_instance_T[...]
-    //  or GPU_centroid[...] = GPU_instance_T[...]
-    //  or GPU_centroid_T[...] = GPU_instance[...]
-
+    for (int j = 0; j < NB_DIMS; j++)
       GPU_centroid_T[j * NB_CLUSTERS + centroidIdx] = GPU_instance_T[j * NB_INSTANCES + idx];
 
   }
@@ -421,24 +412,8 @@ void gpu_Kmeans()
   Dg.z = 1;
   kernel_SetupcuRand<<<Dg,Db>>>(devStates);
   
-  // Select initial centroids at random                              // TO DO
-  // CudaCheckError();
+  // Select initial centroids at random
   kernel_InitializeCentroids<<<Dg,Db>>>(devStates, GPU_centroid_T, GPU_instance_T);
-
-  //CudaCheckError();
-
-  // Note: IF NEEDED you can transpose a 2D array using CUBLAS_GEAM() function
-  // Ex: Transpose GPU_centroid_T to GPU_centroid
-  //
-  //T_real alpha = 1.0f;
-  //T_real beta = 0.0f;
-  //CHECK_CUBLAS_SUCCESS(CUBLAS_GEAM(cublasHandle,
-  //                                 CUBLAS_OP_T, CUBLAS_OP_N,
-  //                                 NB_DIMS, NB_CLUSTERS,
-  //                                 &alpha, GPU_centroid_T, NB_CLUSTERS,
-  //                                 &beta, NULL, NB_DIMS,
-  //                                 GPU_centroid, NB_DIMS), 
-  //                     "Use CUBLAS_GEAM to transpose GPU_centroid_T");
 
   // Clustering iterative loop --------------------------------------------
   do {
@@ -455,7 +430,6 @@ void gpu_Kmeans()
     Dg.y = 1;
     Dg.z = 1;
     kernel_ComputeAssign<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, AdrGPU_change_total);
-    // CudaCheckError();
 
     CHECK_CUDA_SUCCESS(cudaMemcpy(&nb_changes, AdrGPU_change_total, 
                                   sizeof(unsigned long long int)*1, 
@@ -463,15 +437,7 @@ void gpu_Kmeans()
                        "Transfer GPU_change_total-->nb_changes");
 
 
-    // - Update Centroids - step 1
-    // -- reset the array of counters of points associated to each cluster
-    //CHECK_CUDA_SUCCESS(cudaMemset(GPU_count, 0,...), "Reset GPU_count to zeros");
-    // -- reset the array of centroid coordinates 
-    //CHECK_CUDA_SUCCESS(cudaMemset(..., ..., ...), "Reset GPU centroids");
-    
     // -- compute the number of points associated to each cluster
-    //   and compute the sum of their coordinates (to compute their barycenter in next kernel)
-    //   Note : you can use atomicAdd(...) ... and shared memory to reduce the nb of atomicAdd....
     Db.x = BLOCK_SIZE_X_N;
     Db.y = 1;
     Db.z = 1;
@@ -511,8 +477,7 @@ void gpu_Kmeans()
 
       kernel_SetupcuRand<<<Dg,Db>>>(devStates);
       
-      // Select initial centroids at random                              // TO DO
-      // CudaCheckError();
+      // Re-initialize centroids at random
       kernel_InitializeCentroids<<<Dg,Db>>>(devStates, GPU_centroid_T, GPU_instance_T);
     }
 
@@ -526,6 +491,6 @@ void gpu_Kmeans()
   } while (tolerance > TOL_KMEANS && nb_iter_kmeans < MAX_ITER_KMEANS);
 
   // To measure correct time in main.cc
-  //cudaDeviceSynchronize();   // not necessary if you call CudaCheckError() 
-                               // that already wait the end of last GPU op.
+  cudaDeviceSynchronize();   // not necessary if you call CudaCheckError() 
+                             //  that already wait the end of last GPU op.
 }
