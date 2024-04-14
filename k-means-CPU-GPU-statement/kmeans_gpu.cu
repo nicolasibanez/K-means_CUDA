@@ -202,49 +202,16 @@ __global__ void kernel_InitializeCentroids(curandState *state, T_real *GPU_centr
 /*-------------------------------------------------------------------------------*/
 /* Compute distances and Assign each point to its nearest centorid               */
 /*-------------------------------------------------------------------------------*/
-__global__ void OLD_kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, unsigned long long *AdrGPU_change_total)
+__global__ void kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, unsigned long long *AdrGPU_change_total)
 {
-  // TO DO
-
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   int closest_centroid_idx = 0;
   T_real min_dist = REAL_MAX;
 
-  if (idx < NB_INSTANCES) {
-    for (int i = 0; i < NB_CLUSTERS; ++i) {
-      T_real distance = 0.0;
-      for (int j = 0; j < NB_DIMS; ++j) {
-        T_real temp = (GPU_instance_T[j * NB_INSTANCES + idx] - GPU_centroid_T[j * NB_CLUSTERS + i]);
-        distance += temp*temp;
-      }
-      if (distance < min_dist) {
-        min_dist = distance;
-        closest_centroid_idx = i;
-      }
-    }
-    if (GPU_label[idx] != closest_centroid_idx) {
-      atomicAdd(AdrGPU_change_total, 1);
-      GPU_label[idx] = closest_centroid_idx;
-    }
-  }
- 
-  // Note:
-  //   The "atomic add" on global GPU var could be useful:
-  //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
-  //   Warning: time consumming function
-}
-
-__global__ void OLD2_kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, unsigned long long *AdrGPU_change_total)
-{
   // 1d instead :
   __shared__ T_real sh_centroid_T[NB_DIMS*NB_CLUSTERS];
   __shared__ T_real sh_instance_T[NB_DIMS*BLOCK_SIZE_X_N];
 
-
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int closest_centroid_idx = 0;
-  T_real min_dist = REAL_MAX;
-
   // load centroids in shared memory
   if (threadIdx.x < NB_CLUSTERS) {
     for (int j = 0; j < NB_DIMS; ++j) {
@@ -279,153 +246,14 @@ __global__ void OLD2_kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_ce
   }
 }
 
-__global__ void kernel_ComputeAssign(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, unsigned long long *AdrGPU_change_total)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int dim = threadIdx.y;
-  int clusterIdx = threadIdx.z;
-  int closest_centroid_idx = 0;
-  T_real min_dist = REAL_MAX;
-
-  __shared__ T_real sh_centroid_T[NB_DIMS*NB_CLUSTERS];
-  __shared__ T_real sh_instance_T[NB_DIMS*BLOCK_SIZE_X_N];
-  __shared__ T_real sub_distance[BLOCK_SIZE_X_N*NB_CLUSTERS*NB_DIMS];
-
-  // load centroids in shared memory
-  if (threadIdx.x < NB_CLUSTERS) {
-    for (int j = 0; j < NB_DIMS; ++j) {
-      sh_centroid_T[j * NB_CLUSTERS + threadIdx.x] = GPU_centroid_T[j * NB_CLUSTERS + threadIdx.x];
-    }
-  }
-
-  if (idx < NB_INSTANCES) {
-    for (int j = 0; j < NB_DIMS; ++j) {
-      sh_instance_T[j * BLOCK_SIZE_X_N + threadIdx.x] = GPU_instance_T[j * NB_INSTANCES + idx];
-    }
-    __syncthreads();
-
-    for (int i = 0; i < NB_CLUSTERS; ++i) {
-      T_real distance = 0.0;
-      for (int j = 0; j < NB_DIMS; ++j) {
-        T_real temp = (sh_instance_T[j * BLOCK_SIZE_X_N + threadIdx.x] - sh_centroid_T[j * NB_CLUSTERS + i]);
-        distance += temp*temp;
-      }
-
-
-      if (distance < min_dist) {
-        min_dist = distance;
-        closest_centroid_idx = i;
-      }
-    }
-
-    if (GPU_label[idx] != closest_centroid_idx) {
-      atomicAdd(AdrGPU_change_total, 1);
-      GPU_label[idx] = closest_centroid_idx;
-    }
-  }
-}
-
-__global__ void OLD_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-  
-
-  if (idx < NB_INSTANCES) {
-    for(int clusterIdx = 0; clusterIdx < NB_CLUSTERS; ++clusterIdx){
-      for(int dim = 0; dim < NB_DIMS; ++dim) {
-        if (GPU_label[idx] == clusterIdx) {
-          sh_instance[threadIdx.x] = GPU_instance_T[dim * NB_INSTANCES + idx];
-          sh_count[threadIdx.x] = 1;
-        }
-        else { // Divergence to test
-          sh_instance[threadIdx.x] = 0;
-          sh_count[threadIdx.x] = 0;
-        }
-        
-        __syncthreads();
-
-        // reduction : 
-        for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-          if (threadIdx.x < s) {
-            sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-
-            // Better way?
-            if(dim == 0) {
-              sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-            }
-
-          }
-          __syncthreads();
-        }
-
-        // atomic add in GPU_centroid_T and GPU_count
-        if (threadIdx.x == 0) {
-          atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
-          if (dim == 0) {
-            atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
-          }
-        }
-      } 
-    }
-  }
-}
-
-__global__ void OLD2_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int dim = blockIdx.y;
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-  // I create sh_label[BLOCK_SIZE_X_N] here
-
-  if (idx < NB_INSTANCES) {
-    for(int clusterIdx = 0; clusterIdx < NB_CLUSTERS; ++clusterIdx){
-      // ?
-      if (GPU_label[idx] == clusterIdx) {
-        sh_count[threadIdx.x] = 1;
-        sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
-      }
-      else {
-        sh_count[threadIdx.x] = 0;
-        sh_instance[threadIdx.x] = 0;
-      }
-
-      __syncthreads();
-
-      // reduction : 
-      // 1st step : half the threads should work
-      for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-        }
-        __syncthreads();
-      }
-
-        // atomic add in GPU_centroid_T and GPU_count
-      if (threadIdx.x == 0) {
-        atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
-        if (dim == 0) {
-          atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
-        }
-      }
-    }
-  }
-}
-
+/*-------------------------------------------------------------------------------*/
+/* Update centroids - step 1                                                     */
+/*-------------------------------------------------------------------------------*/
 __global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
 {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   int dim = blockIdx.y;
   int clusterIdx = blockIdx.z;
-
-  // if (threadIdx.x == 0) {
-  //   printf("idx = %d, dim = %d\n", idx, dim);
-  // }
 
   __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
   __shared__ T_real sh_count[BLOCK_SIZE_X_N];
@@ -438,19 +266,6 @@ __global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_
       sh_count[threadIdx.x] = 1;
       sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
     }
-
-
-    // reduction : 
-    // 1st step : half the threads should work
-    // for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-    //   if (threadIdx.x < s) {
-    //     sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-    //     sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-    //   }
-    //   __syncthreads();
-    // }
-
-    // loop unroll version :
 
     #if BLOCK_SIZE_X_N > 1024
     __syncthreads();
@@ -476,8 +291,6 @@ __global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_
       return;
     }
     #endif
-    
-   
 
     #if BLOCK_SIZE_X_N > 256
     __syncthreads();
@@ -548,7 +361,6 @@ __global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_
     sh_count[threadIdx.x] += sh_count[threadIdx.x + 1];
     #endif
 
-    // atomic add in GPU_centroid_T and GPU_count
     if (threadIdx.x == 0 && sh_count[0] > 0) {
       atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
       if (dim == 0) {
@@ -557,232 +369,6 @@ __global__ void kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_
     }
   }
 }
-
-// Version 3 : no cluster loop
-__global__ void OLD4_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int dim = blockIdx.y;
-  int clusterIdx = blockIdx.z;
-
-  // if (threadIdx.x == 0) {
-  //   printf("idx = %d, dim = %d\n", idx, dim);
-  // }
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-
-  if (idx < NB_INSTANCES) {
-    if (GPU_label[idx] == clusterIdx) {
-      sh_count[threadIdx.x] = 1;
-      sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
-    }
-    else {
-      sh_count[threadIdx.x] = 0;
-      sh_instance[threadIdx.x] = 0;
-    }
-
-    // reduction : 
-    // 1st step : half the threads should work
-    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-      if (s > 16) {
-        __syncthreads();
-        if (threadIdx.x < s) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-        }
-        else {
-          return;
-        }
-      }
-      else {
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-      }
-    }
-
-      // atomic add in GPU_centroid_T and GPU_count
-    if (threadIdx.x == 0 && sh_count[0] > 0) {
-      atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
-      if (dim == 0) {
-        atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
-      }
-    }
-  }
-}
-
-__global__ void OLD5_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int dim = blockIdx.y;
-  int clusterIdx = blockIdx.z;
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-
-  if (idx < NB_INSTANCES) {
-    if (GPU_label[idx] == clusterIdx) {
-      sh_count[threadIdx.x] = 1;
-      sh_instance[threadIdx.x] = GPU_instance_T[NB_INSTANCES*dim + idx];
-    }
-    else {
-      sh_count[threadIdx.x] = 0;
-      sh_instance[threadIdx.x] = 0;
-    }
-  }
-
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    T_real sum_instance = 0;
-    T_real sum_count = 0;
-
-    for (int i = 0; i < BLOCK_SIZE_X_N; ++i) {
-      sum_instance += sh_instance[i];
-      sum_count += sh_count[i];
-    }
-
-    atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sum_instance);
-    if (dim == 0) {
-      atomicAdd(&GPU_count[clusterIdx], sum_count);
-    }
-  }
-}
-
-
-__global__ void OLD6_kernel_UpdateCentroid_Step1(T_real *GPU_instance_T, T_real *GPU_centroid_T, int *GPU_label, int *GPU_count)
-{
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-  __shared__ T_real sh_instance[BLOCK_SIZE_X_N];
-  __shared__ T_real sh_count[BLOCK_SIZE_X_N];
-  
-
-  if (idx < NB_INSTANCES) {
-    for(int clusterIdx = 0; clusterIdx < NB_CLUSTERS; ++clusterIdx){
-      for(int dim = 0; dim < NB_DIMS; ++dim) {
-        if (GPU_label[idx] == clusterIdx) {
-          sh_instance[threadIdx.x] = GPU_instance_T[dim * NB_INSTANCES + idx];
-          sh_count[threadIdx.x] = 1;
-        }
-        else { // Divergence to test
-          sh_instance[threadIdx.x] = 0;
-          sh_count[threadIdx.x] = 0;
-        }
-        
-        __syncthreads();
-
-        // reduction : 
-        // 1st step : half the threads should work
-        // for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
-        //   if (threadIdx.x < s) {
-        //     sh_instance[threadIdx.x] += sh_instance[threadIdx.x + s];
-
-        //     // Better way?
-        //     if(dim == 0) {
-        //       sh_count[threadIdx.x] += sh_count[threadIdx.x + s];
-        //     }
-
-        //   }
-        //   __syncthreads();
-        // }
-
-            // loop unroll version :
-        #if BLOCK_SIZE_X_N > 512
-        __syncthreads();
-        if (threadIdx.x < 512) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 512];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + 512];
-        }
-        else
-        {
-          return;
-        }
-        #endif
-    
-   
-
-        #if BLOCK_SIZE_X_N > 256
-        __syncthreads();
-        if (threadIdx.x < 256) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 256];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + 256];
-        }
-        else {
-          return;
-        }
-        #endif
-
-        #if BLOCK_SIZE_X_N > 128
-        __syncthreads();
-        if (threadIdx.x < 128) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 128];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + 128];
-        }
-        else {
-          return;
-        }
-        #endif
-
-        #if BLOCK_SIZE_X_N > 64
-        __syncthreads();
-        if (threadIdx.x < 64) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 64];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + 64];
-        }
-        else {
-          return;
-        }
-        #endif
-
-        #if BLOCK_SIZE_X_N > 32
-        __syncthreads();
-        if (threadIdx.x < 32) {
-          sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 32];
-          sh_count[threadIdx.x] += sh_count[threadIdx.x + 32];
-        }
-        else {
-          return;
-        }
-        #endif
-
-        #if BLOCK_SIZE_X_N > 16
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 16];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + 16];
-        #endif
-
-        #if BLOCK_SIZE_X_N > 8
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 8];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + 8];
-        #endif
-
-        #if BLOCK_SIZE_X_N > 4
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 4];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + 4];
-        #endif
-
-        #if BLOCK_SIZE_X_N > 2
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 2];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + 2];
-        #endif
-
-        #if BLOCK_SIZE_X_N > 1
-        sh_instance[threadIdx.x] += sh_instance[threadIdx.x + 1];
-        sh_count[threadIdx.x] += sh_count[threadIdx.x + 1];
-        #endif
-
-        // atomic add in GPU_centroid_T and GPU_count
-        if (threadIdx.x == 0) {
-          atomicAdd(&GPU_centroid_T[dim * NB_CLUSTERS + clusterIdx], sh_instance[0]);
-          if (dim == 0) {
-            atomicAdd(&GPU_count[clusterIdx], sh_count[0]);
-          }
-        }
-      } 
-    }
-  }
-}
-
 
 /*-------------------------------------------------------------------------------*/
 /* Update centroids - step 2                                                     */
@@ -808,12 +394,6 @@ __global__ void kernel_UpdateCentroid_Step2(T_real *GPU_centroid_T, int *GPU_cou
       atomicAdd(GPU_failed, 1);
     }
   }
- // TO DO
-
- // Note:
- //   The "atomic add" on global GPU var could be useful:
- //     atomicAdd(Adr_of_GPU_var, Integer_Value_to_Add);
- //   Warning: time consumming function
 }
 
 
@@ -870,14 +450,12 @@ void gpu_Kmeans()
     // - Compute distance & Assign points to clusters 
     Db.x = BLOCK_SIZE_X_N;
     Db.y = 1;
-    // Db.y = NB_CLUSTERS;
-    // Db.y = NB_DIMS;
     Db.z = 1;
     Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
     Dg.y = 1;
     Dg.z = 1;
     kernel_ComputeAssign<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, AdrGPU_change_total);
-    CudaCheckError();
+    // CudaCheckError();
 
     CHECK_CUDA_SUCCESS(cudaMemcpy(&nb_changes, AdrGPU_change_total, 
                                   sizeof(unsigned long long int)*1, 
@@ -894,52 +472,19 @@ void gpu_Kmeans()
     // -- compute the number of points associated to each cluster
     //   and compute the sum of their coordinates (to compute their barycenter in next kernel)
     //   Note : you can use atomicAdd(...) ... and shared memory to reduce the nb of atomicAdd....
-    // Db.x = BLOCK_SIZE_X_N;
-    // Db.y = 1;
-    // Db.z = 1;
-    // Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
-    // Dg.y = 1;
-    // Dg.z = 1;
-
-
-    // Db.x = BLOCK_SIZE_X_N;
-    // Db.y = 1;
-    // Db.z = 1;
-    // Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
-    // Dg.y = NB_DIMS; // Not in Db.y to have different shared mem for different dim
-    // Dg.z = 1;
-
     Db.x = BLOCK_SIZE_X_N;
     Db.y = 1;
     Db.z = 1;
     Dg.x = NB_INSTANCES/Db.x + (NB_INSTANCES%Db.x > 0 ? 1 : 0);
-    // Dg.y = 1;
     Dg.y = NB_DIMS;
-    // Dg.z = 1; 
     Dg.z = NB_CLUSTERS;
 
-    // TO verify
     // intialize GPU_centroid_T and GPU_count to 0
     CHECK_CUDA_SUCCESS(cudaMemset(GPU_centroid_T, 0, sizeof(T_real)*NB_DIMS*NB_CLUSTERS), "Reset GPU_centroid_T to zeros");
     CHECK_CUDA_SUCCESS(cudaMemset(GPU_count, 0, sizeof(int)*NB_CLUSTERS), "Reset GPU_count to zeros");
-    
-    // printf("Im here2");
 
     kernel_UpdateCentroid_Step1<<<Dg,Db>>>(GPU_instance_T, GPU_centroid_T, GPU_label, GPU_count);
 
-
-
-    // Db.x = BLOCK_SIZE_X_C;
-    // Db.y = 1;
-    // Db.z = 1;
-    // Dg.x = NB_CLUSTERS/Db.x + (NB_CLUSTERS%Db.x > 0 ? 1 : 0);
-    // Dg.y = 1;
-    // Dg.z = 1;
-    // kernel_UpdateCentroid_Step2<<<Dg,Db>>>(GPU_centroid_T, GPU_count, GPU_instance_T);
-
-    // Initialize the random generator used for each centroid
-    
-    
 
     Db.x = BLOCK_SIZE_X_C;
     Db.y = 1;
@@ -959,8 +504,6 @@ void gpu_Kmeans()
       cudaMemcpyDeviceToHost),
       "Transfer labels 'failed'...");
 
-    // printf("Failed = %d\n", failed);
-
     if (failed>0) {
       CHECK_CUDA_SUCCESS(cudaMemset(GPU_label, 0, sizeof(int)*NB_INSTANCES), 
                      "Reset GPU_label to zeros");
@@ -973,7 +516,7 @@ void gpu_Kmeans()
       kernel_InitializeCentroids<<<Dg,Db>>>(devStates, GPU_centroid_T, GPU_instance_T);
     }
 
-    CudaCheckError();
+    // CudaCheckError();
 
     // - End criteria computation
     tolerance = ((double)nb_changes) / NB_INSTANCES;     
